@@ -33,21 +33,42 @@ void hal_i2c_init(void) {
         .sda_pullup_en = 1, .scl_pullup_en = 1, .master.clk_speed = 400000 };
     i2c_param_config(I2C_PORT, &c); i2c_driver_install(I2C_PORT, I2C_MODE_MASTER, 0, 0, 0);
 }
+static void axp_set_bits(uint8_t r, uint8_t m) { uint8_t v = 0; if (axp_rd(r, &v) == ESP_OK) axp_wr(r, v | m); }
 void hal_axp_init(void) {
-    uint8_t v;
-    if (axp_rd(0x18, &v) == ESP_OK) axp_wr(0x18, v | 0x08);   /* fuel gauge on */
+    uint8_t v = 0;
+    axp_set_bits(0x18, 0x08);   /* CHARGE_GAUGE_WDT_CTRL bit3: fuel gauge enable */
+    axp_set_bits(0x68, 0x01);   /* BAT_DET_CTRL bit0: battery detection */
+    axp_set_bits(0x30, 0x0D);   /* ADC: battery voltage, VBUS, VSYS channels */
+    /* Power key timing (reg 0x27): [5:4] IRQ long-press 1 s, [3:2] hardware off-level 4 s, [1:0] ON-level 128 ms.
+     * Shortest ON time so a quick tap boots; hardware 4 s off stays as a failsafe behind our 1.2 s software off. */
+    axp_wr(0x27, 0x00);
+    /* PWROFF_EN (0x22): bit1 = power key > off-level shuts down (failsafe on), keep other bits */
+    axp_set_bits(0x22, 0x02);
     axp_wr(0x40, 0x00); axp_wr(0x42, 0x00);
-    axp_wr(0x41, 0x03);                                        /* IRQ en 2: PKEY positive/negative edge */
-    axp_wr(0x48, 0xFF); axp_wr(0x49, 0xFF); axp_wr(0x4A, 0xFF); /* clear */
+    axp_wr(0x41, 0x03);         /* IRQ en 2: PKEY positive/negative edge only (no long/short IRQ conflicts) */
+    axp_wr(0x48, 0xFF); axp_wr(0x49, 0xFF); axp_wr(0x4A, 0xFF);
+    axp_rd(0x27, &v); ESP_LOGI(TAG, "axp: pkey timing reg27=0x%02x", v);
 }
 static hal_batt_t batt_cache;
 void hal_batt_get(hal_batt_t *o) { *o = batt_cache; }
 void hal_batt_poll(void) {
-    uint8_t s1 = 0, s2 = 0, p = 0;
+    static int n;
+    uint8_t s1 = 0, s2 = 0, p = 0xFF, vh = 0, vl = 0;
     axp_rd(0x00, &s1); axp_rd(0x01, &s2); axp_rd(0xA4, &p);
-    batt_cache.usb = s1 & 0x20;
-    batt_cache.charging = ((s2 >> 5) & 0x3) == 1;
-    batt_cache.percent = p > 100 ? 100 : p;
+    axp_rd(0x34, &vh); axp_rd(0x35, &vl);
+    int mv = ((vh & 0x1F) << 8) | vl;
+    bool bat = s1 & 0x08;                     /* status1 bit3: battery present */
+    batt_cache.usb = s1 & 0x20;               /* status1 bit5: VBUS good */
+    int cs = s2 & 0x07;                       /* status2 [2:0]: 0 trickle 1 pre 2 CC 3 CV 4 done 5 idle */
+    batt_cache.charging = batt_cache.usb && bat && cs <= 3 && ((s2 >> 5) & 0x3) == 1;
+    if (p <= 100) batt_cache.percent = p;     /* fuel gauge */
+    else if (mv > 0) {                        /* fallback only: rough Li-ion curve */
+        int pc = (mv - 3300) * 100 / (4150 - 3300); batt_cache.percent = pc < 0 ? 0 : pc > 100 ? 100 : pc;
+    }
+    if (cs == 4 && batt_cache.usb) batt_cache.percent = 100;
+    if (n++ % 30 == 0)
+        ESP_LOGI(TAG, "batt: gauge=%u%% vbat=%dmV s1=0x%02x s2=0x%02x present=%d usb=%d chg_state=%d -> %d%% %s",
+                 p, mv, s1, s2, bat, batt_cache.usb, cs, batt_cache.percent, batt_cache.charging ? "charging" : "");
 }
 /* returns bitmask: 1 = key pressed (neg edge), 2 = key released (pos edge) */
 int hal_pkey_poll(void) {
@@ -55,7 +76,11 @@ int hal_pkey_poll(void) {
     axp_wr(0x49, s & 0x03);
     return ((s & 0x02) ? 1 : 0) | ((s & 0x01) ? 2 : 0);
 }
-void hal_power_off(void) { uint8_t v = 0; axp_rd(0x10, &v); axp_wr(0x10, v | 0x01); }
+/* Immediate shutdown: clear pending key IRQs (so nothing is latched for next boot), then PMU off. */
+void hal_power_off(void) {
+    axp_wr(0x48, 0xFF); axp_wr(0x49, 0xFF); axp_wr(0x4A, 0xFF);
+    uint8_t v = 0; axp_rd(0x10, &v); axp_wr(0x10, v | 0x01);
+}
 
 bool hal_boot_pressed(void) { return gpio_get_level(PIN_BOOT) == 0; }
 
@@ -94,6 +119,8 @@ bool hal_time_hm(int *h, int *m) {
 /* ---------- Audio: tiny square/triangle synth -> ES8311 ---------- */
 #define SR 16000
 static i2s_chan_handle_t tx;
+static es8311_handle_t es;
+void hal_set_volume(int pct) { if (es) { es8311_voice_mute(es, pct == 0); es8311_voice_volume_set(es, pct * 85 / 100, NULL); } }
 static QueueHandle_t sfxq;
 static volatile bool music_on;
 typedef struct { uint8_t midi, len; } note_t; /* len in 1/16 notes at 150 bpm */
@@ -146,10 +173,10 @@ void hal_audio_init(void) {
         .gpio_cfg = { .mclk = PIN_I2S_MCLK, .bclk = PIN_I2S_BCLK, .ws = PIN_I2S_LRCK, .dout = PIN_I2S_DOUT, .din = -1 } };
     sc.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
     i2s_channel_init_std_mode(tx, &sc); i2s_channel_enable(tx);
-    es8311_handle_t es = es8311_create(I2C_PORT, ADDR_ES8311);
+    es = es8311_create(I2C_PORT, ADDR_ES8311);
     es8311_clock_config_t ck = { .mclk_from_mclk_pin = true, .mclk_frequency = SR * 256, .sample_frequency = SR };
     if (es8311_init(es, &ck, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16) != ESP_OK) ESP_LOGW(TAG, "es8311 init failed");
-    es8311_voice_volume_set(es, 65, NULL);
+    hal_set_volume(hal_kv_get("volume", 65));
     gpio_set_direction(PIN_PA_EN, GPIO_MODE_OUTPUT); gpio_set_level(PIN_PA_EN, 1);
     sfxq = xQueueCreate(8, sizeof(hal_sfx_t));
     xTaskCreatePinnedToCore(audio_task, "audio", 3072, NULL, 4, NULL, 1);

@@ -22,6 +22,8 @@ static esp_lcd_panel_handle_t panel;
 static esp_lcd_touch_handle_t touch;
 static lv_display_t *disp;
 static bool sleeping;
+static int brightness = 80;
+void hal_set_brightness(int pct) { brightness = pct < 10 ? 10 : pct > 100 ? 100 : pct; if (!sleeping) esp_lcd_panel_co5300_set_brightness(panel, brightness); }
 
 static bool trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx) {
     lv_display_flush_ready((lv_display_t *)ctx); return false;
@@ -59,7 +61,7 @@ static void display_init(void) {
     esp_lcd_panel_reset(panel); esp_lcd_panel_init(panel);
     esp_lcd_panel_set_gap(panel, LCD_X_GAP, 0);
     esp_lcd_panel_disp_on_off(panel, true);
-    esp_lcd_panel_co5300_set_brightness(panel, 80);
+    brightness = hal_kv_get("bright", 80); esp_lcd_panel_co5300_set_brightness(panel, brightness);
 
     size_t sz = LCD_RES * BUF_LINES * 2;   /* small internal DMA strips (2 x 12 lines) */
     void *b1 = heap_caps_malloc(sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -72,26 +74,28 @@ static void display_init(void) {
     esp_lcd_panel_io_handle_t tio;
     esp_lcd_panel_io_i2c_config_t tc = ESP_LCD_TOUCH_IO_I2C_CST9217_CONFIG();
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)I2C_PORT, &tc, &tio));
-    esp_lcd_touch_config_t tcfg = { .x_max = LCD_RES, .y_max = LCD_RES, .rst_gpio_num = PIN_TP_RST, .int_gpio_num = PIN_TP_INT };
+    /* CST9217 is mounted 180 deg to the panel: mirror both axes (matches Waveshare BSP: swap_xy 0, mirror_x 1, mirror_y 1). */
+    esp_lcd_touch_config_t tcfg = { .x_max = LCD_RES, .y_max = LCD_RES, .rst_gpio_num = PIN_TP_RST, .int_gpio_num = PIN_TP_INT,
+        .flags = { .swap_xy = 0, .mirror_x = 1, .mirror_y = 1 } };
     if (esp_lcd_touch_new_i2c_cst9217(tio, &tcfg, &touch) == ESP_OK) {
         lv_indev_t *in = lv_indev_create(); lv_indev_set_type(in, LV_INDEV_TYPE_POINTER); lv_indev_set_read_cb(in, touch_read);
     } else ESP_LOGE("main", "touch init failed");
 }
 static void set_sleep(bool s) {
     sleeping = s;
-    esp_lcd_panel_co5300_set_brightness(panel, s ? 0 : 80);
+    esp_lcd_panel_co5300_set_brightness(panel, s ? 0 : brightness);
     esp_lcd_panel_disp_on_off(panel, !s);
     app_set_sleep(s);
 }
-/* PWR: quick press toggles screen sleep; hold ~2 s powers off (hint shown after 600 ms). */
+/* PWR: quick press (<300 ms) toggles screen sleep; hold: message at 300 ms, off at 1.2 s. */
 static void power_poll(void) {
     static int64_t down_at; static bool down, hinted;
     int ev = hal_pkey_poll(); int64_t now = esp_timer_get_time() / 1000;
     if (ev & 1) { down = true; down_at = now; hinted = false; }
-    if (down && !hinted && now - down_at > 600) { hinted = true; if (sleeping) set_sleep(false); app_power_hint(true); lv_refr_now(NULL); }
-    if (down && now - down_at > 2000) { app_power_hint(true); lv_refr_now(NULL); vTaskDelay(pdMS_TO_TICKS(300)); hal_power_off(); }
+    if (down && !hinted && now - down_at > 300) { hinted = true; if (sleeping) set_sleep(false); app_power_hint(true); lv_refr_now(NULL); }
+    if (down && now - down_at > 1200) { hal_power_off(); vTaskDelay(portMAX_DELAY); }
     if (ev & 2) {
-        if (!down || now - down_at <= 600) set_sleep(!sleeping);  /* short press (or release seen alone) */
+        if (!down || now - down_at <= 300) set_sleep(!sleeping);  /* short press (or release seen alone) */
         if (hinted) app_power_hint(false);
         down = false;
     }
@@ -100,7 +104,10 @@ static void ui_task(void *a) {
     int64_t last_status = 0, last_pk = 0, last_ota = 0; bool marked = false;
     for (;;) {
         int64_t now = esp_timer_get_time() / 1000;
-        if (now - last_pk >= 20) { last_pk = now; power_poll(); }
+        if (now - last_pk >= 20) { last_pk = now; power_poll();
+            static bool boot_prev; bool b = hal_boot_pressed();
+            if (b && !boot_prev) { if (sleeping) set_sleep(false); else app_home_button(); }
+            boot_prev = b; }
         if (now - last_status >= 1000) { last_status = now; hal_batt_poll(); app_refresh_status(); }
         if (now - last_ota >= 200) { last_ota = now; app_ota_tick(); }
         uint32_t d = lv_timer_handler();

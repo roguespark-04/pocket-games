@@ -9,6 +9,7 @@ typedef struct game {
     void (*start)(lv_obj_t *screen);          /* build game UI on an empty screen */
     void (*stop)(void);                       /* free resources; screen is deleted after */
     void (*on_sleep)(bool sleeping);          /* pause when screen sleeps */
+    bool (*has_saved)(void);                  /* optional: a paused game is waiting to resume */
 } game_t;
 extern const game_t *const GAMES[];
 extern const int GAME_COUNT;

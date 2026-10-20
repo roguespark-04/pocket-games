@@ -4,6 +4,12 @@
 #include "hal.h"
 #include <stdio.h>
 
+static lv_obj_t *gear;
+void app_open_settings(void);
+static bool hit(lv_obj_t *o, lv_point_t p, int pad) {
+    lv_area_t a; lv_obj_get_coords(o, &a);
+    return p.x >= a.x1 - pad && p.x <= a.x2 + pad && p.y >= a.y1 - pad && p.y <= a.y2 + pad;
+}
 static lv_obj_t *home, *icon_tile, *name_lbl, *best_lbl, *time_lbl, *dots[8];
 static lv_obj_t *panel, *wifi_val, *sig_val, *bat_val, *hs_val[8];
 static lv_obj_t *power_ov;
@@ -43,7 +49,8 @@ static void show_page(void) {
     g->draw_icon(icon_tile);
     lv_label_set_text(name_lbl, g->name);
     char b[32], n[16]; int32_t hs = game_high_score(g);
-    if (hs > 0) { fmt_thousands(n, sizeof n, hs); snprintf(b, sizeof b, "Best %s", n); } else snprintf(b, sizeof b, "Tap to play");
+    if (g->has_saved && g->has_saved()) snprintf(b, sizeof b, "Tap to resume");
+    else if (hs > 0) { fmt_thousands(n, sizeof n, hs); snprintf(b, sizeof b, "Best %s", n); } else snprintf(b, sizeof b, "Tap to play");
     lv_label_set_text(best_lbl, b);
     for (int i = 0; i < GAME_COUNT && i < 8; i++)
         lv_obj_set_style_bg_color(dots[i], i == page ? C_LABEL : C_SEP, 0);
@@ -55,6 +62,7 @@ static bool in_icon(lv_point_t p) {
 static void home_cb(g_kind_t k, lv_point_t s, int arg, void *ud) {
     (void)arg; (void)ud;
     if (k == G_TAP && in_icon(s)) app_launch(GAMES[page]);
+    else if (k == G_TAP && hit(gear, s, 8)) app_open_settings();
     else if (k == G_DOWN && s.y < 140) app_open_panel();
     else if (k == G_LEFT && page < GAME_COUNT - 1) { page++; show_page(); }
     else if (k == G_RIGHT && page > 0) { page--; show_page(); }
@@ -90,9 +98,13 @@ static void build_home(void) {
     for (int i = 0; i < n; i++) {
         dots[i] = plain(home); lv_obj_set_size(dots[i], 8, 8);
         lv_obj_set_style_radius(dots[i], 4, 0); lv_obj_set_style_bg_opa(dots[i], LV_OPA_COVER, 0);
-        lv_obj_align(dots[i], LV_ALIGN_BOTTOM_MID, (i - (n - 1) / 2.0f) * 16, -40);
+        lv_obj_align(dots[i], LV_ALIGN_CENTER, (i - (n - 1) / 2.0f) * 16, 148);
         if (n < 2) lv_obj_add_flag(dots[i], LV_OBJ_FLAG_HIDDEN);
     }
+    gear = plain(home); lv_obj_set_size(gear, 48, 48); lv_obj_set_style_radius(gear, 24, 0);
+    lv_obj_set_style_bg_opa(gear, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(gear, C_SURFACE2, 0);
+    lv_obj_align(gear, LV_ALIGN_BOTTOM_MID, 0, -26);
+    lv_obj_t *gl = label(gear, F_BODY, C_LABEL, LV_SYMBOL_SETTINGS); lv_obj_center(gl);
     /* full-screen touch surface on top */
     lv_obj_t *touch = plain(home); lv_obj_set_size(touch, SCR, SCR);
     home_g = (gesture_t){ .cb = home_cb };
@@ -196,7 +208,7 @@ void app_refresh_status(void) {
     int n = GAME_COUNT > 2 ? 2 : GAME_COUNT;
     for (int i = 0; i < n; i++) { fmt_thousands(b, sizeof b, game_high_score(GAMES[i])); lv_label_set_text(hs_val[i], b); }
 }
-void app_open_panel(void) { lv_obj_remove_flag(panel, LV_OBJ_FLAG_HIDDEN); app_refresh_status(); }
+void app_open_panel(void) { lv_obj_remove_flag(panel, LV_OBJ_FLAG_HIDDEN); app_refresh_status(); show_page(); }
 
 /* ---------- Update prompt / progress / rollback notice (modal) ---------- */
 static lv_obj_t *modal, *modal_pct;
@@ -276,4 +288,72 @@ void app_power_hint(bool show) {
     if (show) lv_obj_remove_flag(power_ov, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(power_ov, LV_OBJ_FLAG_HIDDEN);
 }
 void app_preview_set_page(int i) { page = i; show_page(); }
+/* ---------- Settings: brightness + volume ---------- */
+static lv_obj_t *settings, *sl_bright, *sl_vol, *val_bright, *val_vol;
+static void apply_setting(lv_obj_t *sl) {
+    int v = lv_slider_get_value(sl); char b[8]; snprintf(b, sizeof b, "%d%%", v);
+    if (sl == sl_bright) { hal_set_brightness(v); hal_kv_set("bright", v); lv_label_set_text(val_bright, b); }
+    else { hal_set_volume(v); hal_kv_set("volume", v); lv_label_set_text(val_vol, b); hal_sfx(SFX_ROTATE); }
+}
+static void slider_ev(lv_event_t *e) { apply_setting(lv_event_get_target(e)); }
+static void step_ev(lv_event_t *e) {
+    intptr_t d = (intptr_t)lv_event_get_user_data(e);
+    lv_obj_t *sl = (d == 1 || d == -1) ? sl_bright : sl_vol;
+    int step = (d > 0) ? 10 : -10;
+    int v = lv_slider_get_value(sl) + step; int min = (sl == sl_bright) ? 10 : 0;
+    lv_slider_set_value(sl, v < min ? min : v > 100 ? 100 : v, LV_ANIM_OFF); apply_setting(sl);
+}
+static lv_obj_t *round_btn(lv_obj_t *p, const char *sym, int x, int y, intptr_t id) {
+    lv_obj_t *b = lv_button_create(p); lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, 48, 48); lv_obj_set_style_radius(b, 24, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(b, C_SURFACE2, 0);
+    lv_obj_set_style_bg_color(b, C_SEP, LV_STATE_PRESSED);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_t *l = label(b, F_BODY, C_LABEL, sym); lv_obj_center(l);
+    lv_obj_add_event_cb(b, step_ev, LV_EVENT_CLICKED, (void *)id);
+    return b;
+}
+static lv_obj_t *setting_row(lv_obj_t *p, const char *name, int y, int val, int min, lv_obj_t **val_lbl, intptr_t id) {
+    lv_obj_t *n = label(p, F_BODY, C_LABEL, name); lv_obj_set_pos(n, 83, y);
+    *val_lbl = label(p, F_BODY, C_LABEL2, ""); lv_obj_align(*val_lbl, LV_ALIGN_TOP_RIGHT, -83, y);
+    round_btn(p, LV_SYMBOL_MINUS, 63, y + 34, -id);
+    round_btn(p, LV_SYMBOL_PLUS, SCR - 63 - 48, y + 34, id);
+    lv_obj_t *sl = lv_slider_create(p);
+    lv_obj_set_size(sl, SCR - 2 * 63 - 2 * 48 - 2 * 20, 8); lv_obj_set_pos(sl, 63 + 48 + 20, y + 34 + 20);
+    lv_slider_set_range(sl, min, 100); lv_slider_set_value(sl, val, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(sl, C_SURFACE2, LV_PART_MAIN); lv_obj_set_style_bg_opa(sl, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sl, C_BLUE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, C_LABEL, LV_PART_KNOB); lv_obj_set_style_pad_all(sl, 8, LV_PART_KNOB);
+    lv_obj_set_style_anim_duration(sl, 0, 0);
+    lv_obj_set_ext_click_area(sl, 20);   /* 48 px tall touch target */
+    lv_obj_add_event_cb(sl, slider_ev, LV_EVENT_VALUE_CHANGED, NULL);
+    char b[8]; snprintf(b, sizeof b, "%d%%", val); lv_label_set_text(*val_lbl, b);
+    return sl;
+}
+static void settings_done(lv_event_t *e) { (void)e; lv_obj_add_flag(settings, LV_OBJ_FLAG_HIDDEN); }
+void app_open_settings(void) {
+    if (!settings) {
+        settings = plain(lv_layer_top()); lv_obj_set_size(settings, SCR, SCR); lv_obj_add_flag(settings, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_opa(settings, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(settings, C_BG, 0);
+        lv_obj_t *t = label(settings, F_HEAD, C_LABEL, "Settings"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 56);
+        sl_bright = setting_row(settings, "Brightness", 116, hal_kv_get("bright", 80), 10, &val_bright, 1);
+        sl_vol = setting_row(settings, "Volume", 236, hal_kv_get("volume", 65), 0, &val_vol, 2);
+        lv_obj_t *d = lv_button_create(settings); lv_obj_remove_style_all(d);
+        lv_obj_set_size(d, 160, 52); lv_obj_set_style_radius(d, 26, 0);
+        lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(d, C_BLUE, 0);
+        lv_obj_set_style_transform_scale(d, 246, LV_STATE_PRESSED);
+        lv_obj_set_style_transform_pivot_x(d, 80, 0); lv_obj_set_style_transform_pivot_y(d, 26, 0);
+        lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 360);
+        lv_obj_t *l = label(d, F_BODY, C_LABEL, "Done"); lv_obj_center(l);
+        lv_obj_add_event_cb(d, settings_done, LV_EVENT_CLICKED, NULL);
+    }
+    lv_obj_remove_flag(settings, LV_OBJ_FLAG_HIDDEN);
+}
+/* BOOT = Home, from anywhere. Games auto-pause and keep their state. */
+void app_home_button(void) {
+    if (settings) lv_obj_add_flag(settings, LV_OBJ_FLAG_HIDDEN);
+    if (panel) lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+    if (running) { if (running->on_sleep) running->on_sleep(true); app_go_home(); }
+    else show_page();
+}
 void app_init(void) { build_home(); build_panel(); lv_screen_load(home); app_refresh_status(); }

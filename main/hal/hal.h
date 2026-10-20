@@ -41,3 +41,6 @@ void hal_ota_get(hal_ota_t *o);
 void hal_ota_check(void);         /* async */
 void hal_ota_install(void);       /* async, user-initiated only */
 void hal_ota_ack(void);           /* clears prompt + rolled_back flags */
+
+void hal_set_brightness(int pct);   /* 10..100, live */
+void hal_set_volume(int pct);       /* 0..100, live */

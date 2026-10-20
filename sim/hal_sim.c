@@ -14,3 +14,5 @@ void hal_ota_get(hal_ota_t *o) { *o = sim_ota; }
 void hal_ota_check(void) {}
 void hal_ota_install(void) {}
 void hal_ota_ack(void) {}
+void hal_set_brightness(int p) { (void)p; }
+void hal_set_volume(int p) { (void)p; }

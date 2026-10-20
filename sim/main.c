@@ -32,6 +32,8 @@ int main(void) {
     /* drop paused overlay for mid-game shot */
     lv_obj_t *scr = lv_screen_active(); lv_obj_delete(lv_obj_get_child(scr, -1));
     save("raw_tetris.rgb565");
-    app_power_hint(true); save("raw_power.rgb565");
+    { void tetris_show_pause(void); tetris_show_pause(); save("raw_pwrmenu.rgb565"); }
+    app_power_hint(true); save("raw_power.rgb565"); app_power_hint(false);
+    app_go_home(); app_open_settings(); save("raw_settings.rgb565");
     return 0;
 }
