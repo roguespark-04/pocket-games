@@ -10,7 +10,8 @@
 
 #define W 10
 #define H 20
-#define CELL 22   /* 220x440 well: only the outer cells of the top row touch the round edge */
+#define CELL 20   /* largest integer cell whose well corners (incl. 2 px outline) fit the r=233 circle with margin:
+                     corner (5c+2, 10c+2): c=20 -> 226 px from center (7 px margin); c=21 -> 238 (clipped) */
 #define WX ((SCR - W * CELL) / 2)   /* 138 */
 #define WY ((SCR - H * CELL) / 2)   /* 43 */
 void fmt_thousands(char *b, int n, int32_t v);

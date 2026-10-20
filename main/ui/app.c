@@ -6,7 +6,7 @@
 
 static lv_obj_t *set_row_card;
 void app_open_settings(void);
-static bool hit(lv_obj_t *o, lv_point_t p, int pad) {
+static inline bool hit(lv_obj_t *o, lv_point_t p, int pad) {
     lv_area_t a; lv_obj_get_coords(o, &a);
     return p.x >= a.x1 - pad && p.x <= a.x2 + pad && p.y >= a.y1 - pad && p.y <= a.y2 + pad;
 }
