@@ -25,3 +25,19 @@ bool hal_time_hm(int *h, int *m); /* false until clock is set */
 #define heap_caps_calloc_psram(n) calloc(1, (n))
 #define heap_caps_free_psram(p) free(p)
 #endif
+
+/* ---- Firmware updates (never auto-installed) ---- */
+typedef enum { OTA_IDLE, OTA_NO_WIFI, OTA_CHECKING, OTA_UPTODATE, OTA_AVAILABLE, OTA_INSTALLING, OTA_RESTARTING, OTA_FAILED } hal_ota_state_t;
+typedef struct {
+    hal_ota_state_t state;
+    char current[32], available[16];
+    int progress;             /* 0..100 while installing */
+    char error[40];
+    bool prompt;              /* boot check found an update; UI should prompt once */
+    bool rolled_back;         /* last update failed to start and was reverted; UI should tell the user once */
+    char failed_version[16];
+} hal_ota_t;
+void hal_ota_get(hal_ota_t *o);
+void hal_ota_check(void);         /* async */
+void hal_ota_install(void);       /* async, user-initiated only */
+void hal_ota_ack(void);           /* clears prompt + rolled_back flags */

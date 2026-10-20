@@ -10,6 +10,7 @@ static lv_obj_t *power_ov;
 static gesture_t home_g, panel_g;
 static int page;
 static const game_t *running;
+void app_ota_tick(void);
 static lv_obj_t *game_scr;
 
 void fmt_thousands(char *b, int n, int32_t v) {
@@ -103,37 +104,58 @@ static void build_home(void) {
 }
 
 /* ---------- Pull-down status panel ---------- */
+#define ROW_H 48
+#define CARD_W 320
+static lv_obj_t *ver_val, *upd_lbl, *upd_btn, *upd_btn_lbl, *upd_card;
 static lv_obj_t *card(lv_obj_t *p, int y, int rows) {
-    lv_obj_t *c = plain(p); lv_obj_set_size(c, 340, rows * 52);
+    lv_obj_t *c = plain(p); lv_obj_set_size(c, CARD_W, rows * ROW_H);
     lv_obj_set_style_radius(c, 20, 0); lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(c, C_SURFACE, 0); lv_obj_align(c, LV_ALIGN_TOP_MID, 0, y);
     for (int i = 1; i < rows; i++) {
-        lv_obj_t *s = plain(c); lv_obj_set_size(s, 340 - 20, 1); lv_obj_set_pos(s, 20, i * 52);
+        lv_obj_t *s = plain(c); lv_obj_set_size(s, CARD_W - 20, 1); lv_obj_set_pos(s, 20, i * ROW_H);
         lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(s, C_SEP, 0);
     }
     return c;
 }
 static lv_obj_t *row(lv_obj_t *c, int i, const char *key) {
-    lv_obj_t *k = label(c, F_BODY, C_LABEL, key); lv_obj_align(k, LV_ALIGN_TOP_LEFT, 20, i * 52 + 14);
-    lv_obj_t *v = label(c, F_BODY, C_LABEL2, ""); lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -20, i * 52 + 14);
+    lv_obj_t *k = label(c, F_BODY, C_LABEL, key); lv_obj_align(k, LV_ALIGN_TOP_LEFT, 20, i * ROW_H + 12);
+    lv_obj_t *v = label(c, F_BODY, C_LABEL2, ""); lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -20, i * ROW_H + 12);
     return v;
 }
 static void close_panel(void) { if (panel) lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN); show_page(); }
 static void panel_cb(g_kind_t k, lv_point_t s, int arg, void *ud) {
-    (void)s; (void)arg; (void)ud;
-    if (k == G_UP || k == G_TAP) close_panel();
+    (void)arg; (void)ud;
+    if (k == G_UP) { close_panel(); return; }
+    if (k != G_TAP) return;
+    lv_area_t a; lv_obj_get_coords(upd_card, &a);
+    bool in_upd_row = s.y >= a.y2 - ROW_H && s.y <= a.y2 && s.x >= a.x1 && s.x <= a.x2; /* whole row is the target */
+    if (!in_upd_row) return;
+    hal_ota_t o; hal_ota_get(&o);
+    if (o.state == OTA_AVAILABLE) hal_ota_install();
+    else if (o.state != OTA_CHECKING && o.state != OTA_INSTALLING && o.state != OTA_RESTARTING) hal_ota_check();
+    app_refresh_status();
 }
 static void build_panel(void) {
     panel = plain(lv_layer_top()); lv_obj_set_size(panel, SCR, SCR);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(panel, C_BG, 0);
-    lv_obj_t *t = label(panel, F_HEAD, C_LABEL, "Status"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 40);
-    lv_obj_t *c1 = card(panel, 84, 3);
-    wifi_val = row(c1, 0, "Wi-Fi"); sig_val = row(c1, 1, "Signal"); bat_val = row(c1, 2, "Battery");
-    lv_obj_t *h = label(panel, F_CAPTION, C_LABEL2, "High Scores"); lv_obj_align(h, LV_ALIGN_TOP_LEFT, 63 + 20, 84 + 156 + 24);
-    int n = GAME_COUNT > 4 ? 4 : GAME_COUNT;
-    lv_obj_t *c2 = card(panel, 84 + 156 + 52, n);
+    lv_obj_t *t = label(panel, F_HEAD, C_LABEL, "Status"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 32);
+    lv_obj_t *c1 = card(panel, 72, 2);
+    wifi_val = row(c1, 0, "Wi-Fi"); bat_val = row(c1, 1, "Battery"); sig_val = NULL;
+    upd_card = card(panel, 72 + 2 * ROW_H + 12, 2);
+    ver_val = row(upd_card, 0, "Version");
+    upd_lbl = label(upd_card, F_BODY, C_BLUE, "Check for Updates");
+    lv_obj_align(upd_lbl, LV_ALIGN_TOP_LEFT, 20, ROW_H + 12);
+    upd_btn = plain(upd_card); lv_obj_set_size(upd_btn, 84, 32);
+    lv_obj_set_style_radius(upd_btn, 16, 0); lv_obj_set_style_bg_opa(upd_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(upd_btn, C_BLUE, 0); lv_obj_align(upd_btn, LV_ALIGN_TOP_RIGHT, -12, ROW_H + 8);
+    upd_btn_lbl = label(upd_btn, F_CAPTION, C_LABEL, "Install"); lv_obj_center(upd_btn_lbl);
+    lv_obj_add_flag(upd_btn, LV_OBJ_FLAG_HIDDEN);
+    int y3 = 72 + 4 * ROW_H + 24;
+    lv_obj_t *h = label(panel, F_CAPTION, C_LABEL2, "High Scores"); lv_obj_align(h, LV_ALIGN_TOP_LEFT, (SCR - CARD_W) / 2 + 20, y3);
+    int n = GAME_COUNT > 2 ? 2 : GAME_COUNT;
+    lv_obj_t *c2 = card(panel, y3 + 24, n);
     for (int i = 0; i < n; i++) hs_val[i] = row(c2, i, GAMES[i]->name);
-    grabber(panel, SCR - 34);
+    grabber(panel, SCR - 26);
     lv_obj_t *touch = plain(panel); lv_obj_set_size(touch, SCR, SCR);
     panel_g = (gesture_t){ .cb = panel_cb }; gesture_attach(touch, &panel_g);
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
@@ -141,23 +163,93 @@ static void build_panel(void) {
 static const char *sig_word(int rssi) {
     return rssi >= -55 ? "Excellent" : rssi >= -67 ? "Good" : rssi >= -78 ? "Fair" : "Weak";
 }
+static void refresh_update_row(void) {
+    hal_ota_t o; hal_ota_get(&o); char b[48];
+    lv_label_set_text(ver_val, o.current);
+    lv_color_t c = C_LABEL2; bool btn = false;
+    switch (o.state) {
+    case OTA_CHECKING: snprintf(b, sizeof b, "Checking..."); break;
+    case OTA_UPTODATE: snprintf(b, sizeof b, "Up to date"); break;
+    case OTA_NO_WIFI: snprintf(b, sizeof b, "No Wi-Fi, tap to retry"); break;
+    case OTA_AVAILABLE: snprintf(b, sizeof b, "%s available", o.available); c = C_LABEL; btn = true; break;
+    case OTA_INSTALLING: snprintf(b, sizeof b, "Installing %d%%", o.progress); c = C_LABEL; break;
+    case OTA_RESTARTING: snprintf(b, sizeof b, "Restarting..."); c = C_LABEL; break;
+    case OTA_FAILED: snprintf(b, sizeof b, "%s", o.error); c = C_RED; break;
+    default: snprintf(b, sizeof b, "Check for Updates"); c = C_BLUE; break;
+    }
+    if (o.state == OTA_IDLE && o.rolled_back) { snprintf(b, sizeof b, "%s didn't start", o.failed_version); c = C_ORANGE; }
+    lv_label_set_text(upd_lbl, b); lv_obj_set_style_text_color(upd_lbl, c, 0);
+    if (btn) lv_obj_remove_flag(upd_btn, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(upd_btn, LV_OBJ_FLAG_HIDDEN);
+}
 void app_refresh_status(void) {
     int h, m; char b[48];
     if (time_lbl) { if (hal_time_hm(&h, &m)) { snprintf(b, sizeof b, "%d:%02d", (h + 11) % 12 + 1, m); lv_label_set_text(time_lbl, b); } }
     if (!panel || lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) return;
     hal_wifi_t w; hal_wifi_get(&w);
-    lv_label_set_text(wifi_val, w.connected ? w.ssid : "Not Connected");
-    lv_obj_set_style_text_color(wifi_val, C_LABEL2, 0);
-    if (w.connected) { snprintf(b, sizeof b, "%s, %d dBm", sig_word(w.rssi), w.rssi); lv_label_set_text(sig_val, b); }
-    else lv_label_set_text(sig_val, "-");
+    if (w.connected) snprintf(b, sizeof b, "%s, %s", w.ssid, sig_word(w.rssi)); else snprintf(b, sizeof b, "Not Connected");
+    lv_label_set_text(wifi_val, b);
     hal_batt_t bt; hal_batt_get(&bt);
     snprintf(b, sizeof b, "%d%%%s", bt.percent, bt.charging ? ", Charging" : bt.usb ? ", Plugged In" : "");
     lv_label_set_text(bat_val, b);
     lv_obj_set_style_text_color(bat_val, bt.charging ? C_GREEN : (bt.percent <= 20 ? C_RED : C_LABEL2), 0);
-    int n = GAME_COUNT > 4 ? 4 : GAME_COUNT;
+    refresh_update_row();
+    int n = GAME_COUNT > 2 ? 2 : GAME_COUNT;
     for (int i = 0; i < n; i++) { fmt_thousands(b, sizeof b, game_high_score(GAMES[i])); lv_label_set_text(hs_val[i], b); }
 }
 void app_open_panel(void) { lv_obj_remove_flag(panel, LV_OBJ_FLAG_HIDDEN); app_refresh_status(); }
+
+/* ---------- Update prompt / progress / rollback notice (modal) ---------- */
+static lv_obj_t *modal, *modal_pct;
+static void modal_close(void) { if (modal) { lv_obj_delete(modal); modal = NULL; modal_pct = NULL; } }
+static void modal_btn(lv_event_t *e) {
+    intptr_t id = (intptr_t)lv_event_get_user_data(e);
+    hal_ota_ack(); modal_close();
+    if (id == 1) hal_ota_install();
+}
+static lv_obj_t *modal_base(const char *title, const char *body) {
+    modal_close();
+    modal = plain(lv_layer_top()); lv_obj_set_size(modal, SCR, SCR); lv_obj_add_flag(modal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(modal, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(modal, C_BG, 0);
+    lv_obj_t *t = label(modal, F_TITLE, C_LABEL, title); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 120);
+    lv_obj_t *b = label(modal, F_BODY, C_LABEL2, body); lv_obj_set_width(b, 300);
+    lv_obj_set_style_text_align(b, LV_TEXT_ALIGN_CENTER, 0); lv_obj_align(b, LV_ALIGN_TOP_MID, 0, 168);
+    return modal;
+}
+static void mbtn(const char *txt, bool primary, int y, intptr_t id) {
+    lv_obj_t *b = lv_button_create(modal); lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, 220, 52); lv_obj_set_style_radius(b, 26, 0); lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, primary ? C_BLUE : C_SURFACE2, 0);
+    lv_obj_set_style_transform_scale(b, 246, LV_STATE_PRESSED);
+    lv_obj_set_style_transform_pivot_x(b, 110, 0); lv_obj_set_style_transform_pivot_y(b, 26, 0);
+    lv_obj_align(b, LV_ALIGN_TOP_MID, 0, y);
+    lv_obj_t *l = label(b, F_BODY, C_LABEL, txt); lv_obj_center(l);
+    lv_obj_add_event_cb(b, modal_btn, LV_EVENT_CLICKED, (void *)id);
+}
+static bool modal_is_progress;
+/* Called ~5x/s. Prompts only on the home screen, never mid-game. */
+void app_ota_tick(void) {
+    hal_ota_t o; hal_ota_get(&o);
+    if (o.state == OTA_INSTALLING || o.state == OTA_RESTARTING) {
+        if (!modal || !modal_is_progress) {
+            modal_base("Installing Update", "Keep the device on.");
+            modal_pct = label(modal, F_DISPLAY, C_LABEL, "0%"); lv_obj_align(modal_pct, LV_ALIGN_TOP_MID, 0, 230);
+            modal_is_progress = true;
+        }
+        char b[16]; if (o.state == OTA_RESTARTING) snprintf(b, sizeof b, "Done"); else snprintf(b, sizeof b, "%d%%", o.progress);
+        lv_label_set_text(modal_pct, b);
+        return;
+    }
+    if (modal && modal_is_progress) { modal_close(); modal_is_progress = false; app_refresh_status(); }
+    if (modal || running) return;
+    char b[96];
+    if (o.rolled_back) {
+        snprintf(b, sizeof b, "Version %s couldn't start, so %s was restored.", o.failed_version, o.current);
+        modal_base("Update Didn't Start", b); mbtn("OK", true, 260, 0); modal_is_progress = false;
+    } else if (o.prompt && o.state == OTA_AVAILABLE) {
+        snprintf(b, sizeof b, "Version %s is ready to install. You're on %s.", o.available, o.current);
+        modal_base("Update Available", b); mbtn("Install", true, 244, 1); mbtn("Later", false, 308, 0); modal_is_progress = false;
+    }
+}
 
 /* ---------- Navigation ---------- */
 void app_launch(const game_t *g) {

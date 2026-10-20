@@ -6,3 +6,4 @@ sim/obj/
 sim/sim
 sim/*.rgb565
 sim/srcs.txt
+dist/

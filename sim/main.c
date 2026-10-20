@@ -1,5 +1,6 @@
 #include "lvgl.h"
 #include "app.h"
+#include "hal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #define N 466
@@ -25,6 +26,8 @@ int main(void) {
     save("raw_home.rgb565");
     app_open_panel(); save("raw_panel.rgb565");
     lv_obj_add_flag(lv_obj_get_child(lv_layer_top(), 0), LV_OBJ_FLAG_HIDDEN);
+    { extern hal_ota_t sim_ota; sim_ota.prompt = true; app_ota_tick(); save("raw_prompt.rgb565");
+      lv_obj_delete(lv_obj_get_child(lv_layer_top(), -1)); sim_ota.prompt = false; }
     app_launch(&GAME_TETRIS); tetris_preview_state();
     /* drop paused overlay for mid-game shot */
     lv_obj_t *scr = lv_screen_active(); lv_obj_delete(lv_obj_get_child(scr, -1));

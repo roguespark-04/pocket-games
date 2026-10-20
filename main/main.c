@@ -15,7 +15,7 @@
 #include "esp_lcd_touch_cst9217.h"
 
 void hal_i2c_init(void); void hal_axp_init(void); void hal_batt_poll(void); int hal_pkey_poll(void);
-void hal_power_off(void); void hal_wifi_init(void); void hal_audio_init(void); void hal_nvs_init(void);
+void hal_power_off(void); void hal_ota_boot(void); void hal_ota_mark_valid(void); void hal_wifi_init(void); void hal_audio_init(void); void hal_nvs_init(void);
 
 #define BUF_LINES 12  /* even: CO5300 needs even-aligned windows */
 static esp_lcd_panel_handle_t panel;
@@ -97,12 +97,14 @@ static void power_poll(void) {
     }
 }
 static void ui_task(void *a) {
-    int64_t last_status = 0, last_pk = 0;
+    int64_t last_status = 0, last_pk = 0, last_ota = 0; bool marked = false;
     for (;;) {
         int64_t now = esp_timer_get_time() / 1000;
         if (now - last_pk >= 20) { last_pk = now; power_poll(); }
         if (now - last_status >= 1000) { last_status = now; hal_batt_poll(); app_refresh_status(); }
+        if (now - last_ota >= 200) { last_ota = now; app_ota_tick(); }
         uint32_t d = lv_timer_handler();
+        if (!marked && now > 8000) { marked = true; hal_ota_mark_valid(); }  /* UI up and stable for 8 s (Wi-Fi, audio, first frames) */
         vTaskDelay(pdMS_TO_TICKS(d < 2 ? 2 : d > 10 ? 10 : d));
     }
 }
@@ -114,5 +116,6 @@ void app_main(void) {
     display_init();
     hal_audio_init();
     app_init();
+    hal_ota_boot();
     xTaskCreatePinnedToCore(ui_task, "ui", 8192, NULL, 5, NULL, 1);
 }

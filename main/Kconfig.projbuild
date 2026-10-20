@@ -1,0 +1,8 @@
+menu "Pocket Games"
+config PG_OTA_MANIFEST_URL
+    string "Firmware update manifest URL"
+    default "https://github.com/roguespark-04/pocket-games/releases/latest/download/manifest.json"
+    help
+        JSON {"version":"x.y.z","url":"https://.../pocket-games-x.y.z.bin"}. For a LAN server use http://<ip>:8070/manifest.json
+        (requires CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y).
+endmenu
