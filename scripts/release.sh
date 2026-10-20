@@ -11,10 +11,16 @@ BASE="${2:-https://github.com/$REPO/releases/download/v$VER}"
 [ -n "${COMPANION_WIFI_PASSWORD:-}" ] || { echo "COMPANION_WIFI_PASSWORD not set"; exit 1; }
 echo "$VER" > version.txt
 . "${IDF_PATH:-$HOME/esp/esp-idf}/export.sh" >/dev/null 2>&1
-idf.py build >/tmp/pocket-games-release.log 2>&1 || { tail -30 /tmp/pocket-games-release.log; exit 1; }
+idf.py reconfigure >/tmp/pocket-games-release.log 2>&1 && idf.py build >>/tmp/pocket-games-release.log 2>&1 || { tail -30 /tmp/pocket-games-release.log; exit 1; }
 mkdir -p dist
 BIN="pocket-games-$VER.bin"
 cp build/pocket-games.bin "dist/$BIN"
+# refuse to publish a bin whose embedded version doesn't match
+python3 - "dist/$BIN" "$VER" <<'PY' || { echo "embedded version mismatch"; exit 1; }
+import sys; d=open(sys.argv[1],'rb').read(); off=0x20  # esp_image header(24)+segment header(8) -> esp_app_desc_t
+v=d[off+16:off+48].split(b'\0')[0].decode()
+print("embedded version:", v); sys.exit(0 if v==sys.argv[2] else 1)
+PY
 cp build/bootloader/bootloader.bin build/partition_table/partition-table.bin build/ota_data_initial.bin dist/ 2>/dev/null || true
 SHA=$(sha256sum "dist/$BIN" | cut -d' ' -f1); SIZE=$(stat -c %s "dist/$BIN")
 printf '{"version":"%s","url":"%s/%s","size":%s,"sha256":"%s"}\n' "$VER" "$BASE" "$BIN" "$SIZE" "$SHA" > dist/manifest.json

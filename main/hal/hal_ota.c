@@ -108,6 +108,8 @@ static void do_install(void) {
     if (esp_https_ota_finish(oh) != ESP_OK) { fail("Update didn't verify"); return; }   /* image hash/header checked here */
     int a, b, d; sscanf(st.available, "%d.%d.%d", &a, &b, &d);
     hal_kv_set("ota_try", (a << 16) | (b << 8) | d);   /* remembered in case it fails to boot */
+    const esp_partition_t *np = esp_ota_get_boot_partition();
+    hal_kv_set("ota_part", np ? (int32_t)np->address : 0);
     hal_kv_set("ota_rb_seen", 0);
     st.progress = 100; set_state(OTA_RESTARTING);
     vTaskDelay(pdMS_TO_TICKS(1200));
@@ -134,13 +136,17 @@ void hal_ota_boot(void) {
     int32_t tried = hal_kv_get("ota_try", 0);
     if (tried) {
         char tv[16]; snprintf(tv, sizeof tv, "%ld.%ld.%ld", (long)(tried >> 16), (long)((tried >> 8) & 0xFF), (long)(tried & 0xFF));
-        if (strcmp(tv, st.current) != 0) {   /* we tried to install tv but are running something else: it rolled back */
+        int32_t want = hal_kv_get("ota_part", 0);
+        const esp_partition_t *run = esp_ota_get_running_partition();
+        bool landed = want ? (run && (int32_t)run->address == want) : strcmp(tv, st.current) == 0;
+        if (landed) { hal_kv_set("ota_bad", 0); ESP_LOGI(TAG, "update %s booted OK (reports %s)", tv, st.current); }
+        else {   /* we installed tv into another slot but are running the old one: it rolled back */
             hal_kv_set("ota_bad", tried);
             snprintf(st.failed_version, sizeof st.failed_version, "%s", tv);
             st.rolled_back = !hal_kv_get("ota_rb_seen", 0);
             ESP_LOGW(TAG, "update %s failed to boot; running %s (rolled back)", tv, st.current);
         }
-        hal_kv_set("ota_try", 0);
+        hal_kv_set("ota_try", 0); hal_kv_set("ota_part", 0);
     }
     if (!st.rolled_back && hal_kv_get("ota_bad", 0)) {
         int32_t bv = hal_kv_get("ota_bad", 0);
