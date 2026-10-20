@@ -4,7 +4,7 @@
 #include "hal.h"
 #include <stdio.h>
 
-static lv_obj_t *gear;
+static lv_obj_t *set_row_card;
 void app_open_settings(void);
 static bool hit(lv_obj_t *o, lv_point_t p, int pad) {
     lv_area_t a; lv_obj_get_coords(o, &a);
@@ -62,7 +62,6 @@ static bool in_icon(lv_point_t p) {
 static void home_cb(g_kind_t k, lv_point_t s, int arg, void *ud) {
     (void)arg; (void)ud;
     if (k == G_TAP && in_icon(s)) app_launch(GAMES[page]);
-    else if (k == G_TAP && hit(gear, s, 8)) app_open_settings();
     else if (k == G_DOWN && s.y < 140) app_open_panel();
     else if (k == G_LEFT && page < GAME_COUNT - 1) { page++; show_page(); }
     else if (k == G_RIGHT && page > 0) { page--; show_page(); }
@@ -101,10 +100,6 @@ static void build_home(void) {
         lv_obj_align(dots[i], LV_ALIGN_CENTER, (i - (n - 1) / 2.0f) * 16, 148);
         if (n < 2) lv_obj_add_flag(dots[i], LV_OBJ_FLAG_HIDDEN);
     }
-    gear = plain(home); lv_obj_set_size(gear, 48, 48); lv_obj_set_style_radius(gear, 24, 0);
-    lv_obj_set_style_bg_opa(gear, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(gear, C_SURFACE2, 0);
-    lv_obj_align(gear, LV_ALIGN_BOTTOM_MID, 0, -26);
-    lv_obj_t *gl = label(gear, F_BODY, C_LABEL, LV_SYMBOL_SETTINGS); lv_obj_center(gl);
     /* full-screen touch surface on top */
     lv_obj_t *touch = plain(home); lv_obj_set_size(touch, SCR, SCR);
     home_g = (gesture_t){ .cb = home_cb };
@@ -139,7 +134,9 @@ static void panel_cb(g_kind_t k, lv_point_t s, int arg, void *ud) {
     (void)arg; (void)ud;
     if (k == G_UP) { close_panel(); return; }
     if (k != G_TAP) return;
-    lv_area_t a; lv_obj_get_coords(upd_card, &a);
+    lv_area_t a; lv_obj_get_coords(set_row_card, &a);
+    if (s.y >= a.y2 - ROW_H && s.y <= a.y2 && s.x >= a.x1 && s.x <= a.x2) { app_open_settings(); return; }
+    lv_obj_get_coords(upd_card, &a);
     bool in_upd_row = s.y >= a.y2 - ROW_H && s.y <= a.y2 && s.x >= a.x1 && s.x <= a.x2; /* whole row is the target */
     if (!in_upd_row) return;
     hal_ota_t o; hal_ota_get(&o);
@@ -150,10 +147,12 @@ static void panel_cb(g_kind_t k, lv_point_t s, int arg, void *ud) {
 static void build_panel(void) {
     panel = plain(lv_layer_top()); lv_obj_set_size(panel, SCR, SCR);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(panel, C_BG, 0);
-    lv_obj_t *t = label(panel, F_HEAD, C_LABEL, "Status"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 32);
-    lv_obj_t *c1 = card(panel, 72, 2);
+    lv_obj_t *t = label(panel, F_HEAD, C_LABEL, "Status"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 22);
+    lv_obj_t *c1 = card(panel, 62, 3); set_row_card = c1;
     wifi_val = row(c1, 0, "Wi-Fi"); bat_val = row(c1, 1, "Battery"); sig_val = NULL;
-    upd_card = card(panel, 72 + 2 * ROW_H + 12, 2);
+    lv_obj_t *sv = row(c1, 2, "Settings"); lv_label_set_text(sv, LV_SYMBOL_RIGHT); lv_obj_set_style_text_font(sv, F_CAPTION, 0);
+    lv_obj_align(sv, LV_ALIGN_TOP_RIGHT, -20, 2 * ROW_H + 15);
+    upd_card = card(panel, 62 + 3 * ROW_H + 12, 2);
     ver_val = row(upd_card, 0, "Version");
     upd_lbl = label(upd_card, F_BODY, C_BLUE, "Check for Updates");
     lv_obj_align(upd_lbl, LV_ALIGN_TOP_LEFT, 20, ROW_H + 12);
@@ -162,12 +161,12 @@ static void build_panel(void) {
     lv_obj_set_style_bg_color(upd_btn, C_BLUE, 0); lv_obj_align(upd_btn, LV_ALIGN_TOP_RIGHT, -12, ROW_H + 8);
     upd_btn_lbl = label(upd_btn, F_CAPTION, C_LABEL, "Install"); lv_obj_center(upd_btn_lbl);
     lv_obj_add_flag(upd_btn, LV_OBJ_FLAG_HIDDEN);
-    int y3 = 72 + 4 * ROW_H + 24;
+    int y3 = 62 + 5 * ROW_H + 12 + 10;
     lv_obj_t *h = label(panel, F_CAPTION, C_LABEL2, "High Scores"); lv_obj_align(h, LV_ALIGN_TOP_LEFT, (SCR - CARD_W) / 2 + 20, y3);
     int n = GAME_COUNT > 2 ? 2 : GAME_COUNT;
-    lv_obj_t *c2 = card(panel, y3 + 24, n);
+    lv_obj_t *c2 = card(panel, y3 + 22, n);
     for (int i = 0; i < n; i++) hs_val[i] = row(c2, i, GAMES[i]->name);
-    grabber(panel, SCR - 26);
+    grabber(panel, SCR - 18);
     lv_obj_t *touch = plain(panel); lv_obj_set_size(touch, SCR, SCR);
     panel_g = (gesture_t){ .cb = panel_cb }; gesture_attach(touch, &panel_g);
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);

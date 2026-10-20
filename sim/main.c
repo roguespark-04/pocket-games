@@ -34,6 +34,6 @@ int main(void) {
     save("raw_tetris.rgb565");
     { void tetris_show_pause(void); tetris_show_pause(); save("raw_pwrmenu.rgb565"); }
     app_power_hint(true); save("raw_power.rgb565"); app_power_hint(false);
-    app_go_home(); app_open_settings(); save("raw_settings.rgb565");
+    app_go_home(); save("raw_home.rgb565"); app_open_settings(); save("raw_settings.rgb565");
     return 0;
 }

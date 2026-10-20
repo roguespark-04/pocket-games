@@ -37,7 +37,8 @@ static int vcmp(const char *a, const char *b) {
 }
 static bool http_cfg_tls(esp_http_client_config_t *c) {
     c->crt_bundle_attach = esp_crt_bundle_attach; c->timeout_ms = 15000;
-    c->buffer_size = 2048; c->buffer_size_tx = 1024; c->keep_alive_enable = true;
+    c->buffer_size = 4096; c->buffer_size_tx = 4096;   /* GitHub's release-asset redirect URL is ~920 chars */
+    c->max_redirection_count = 6; c->keep_alive_enable = true;
     return true;
 }
 static void do_check(bool from_boot) {
@@ -52,7 +53,8 @@ static void do_check(bool from_boot) {
     esp_http_client_handle_t h = esp_http_client_init(&c);
     char *body = heap_caps_calloc(1, 2048, MALLOC_CAP_SPIRAM);
     int len = -1;
-    if (h && body && esp_http_client_open(h, 0) == ESP_OK) {
+    esp_err_t oe = ESP_FAIL;
+    if (h && body && (oe = esp_http_client_open(h, 0)) == ESP_OK) {
         esp_http_client_fetch_headers(h);
         int code = esp_http_client_get_status_code(h);
         /* follow GitHub's release-asset redirects */
@@ -61,11 +63,15 @@ static void do_check(bool from_boot) {
             if (esp_http_client_open(h, 0) != ESP_OK) break;
             esp_http_client_fetch_headers(h); code = esp_http_client_get_status_code(h);
         }
-        if (code == 200) len = esp_http_client_read_response(h, body, 2047);
-        else ESP_LOGW(TAG, "manifest HTTP %d", code);
+        if (code == 200) {   /* read until EOF: works for chunked and unknown length */
+            len = 0; int r;
+            while (len < 2047 && (r = esp_http_client_read(h, body + len, 2047 - len)) > 0) len += r;
+            if (len == 0) ESP_LOGW(TAG, "manifest: empty body");
+        } else { ESP_LOGW(TAG, "manifest HTTP %d", code); len = -2; }
     }
+    else ESP_LOGW(TAG, "manifest open failed: %s", esp_err_to_name(oe));
     if (h) esp_http_client_cleanup(h);
-    if (len <= 0) { free(body); if (!from_boot) fail("Couldn't reach update server"); else set_state(OTA_IDLE); return; }
+    if (len <= 0) { free(body); fail(len == -2 ? "Server error" : "Couldn't reach update server"); return; }
     body[len] = 0;
     cJSON *j = cJSON_Parse(body); free(body);
     const cJSON *v = j ? cJSON_GetObjectItem(j, "version") : NULL, *u = j ? cJSON_GetObjectItem(j, "url") : NULL;
@@ -79,14 +85,16 @@ static void do_check(bool from_boot) {
     if (vcmp(ver, st.current) > 0 && strcmp(ver, bad) != 0) {
         snprintf(st.available, sizeof st.available, "%s", ver);
         set_state(OTA_AVAILABLE); if (from_boot) st.prompt = true;
-    } else set_state(OTA_UPTODATE);
+        ESP_LOGI(TAG, "check result: update %s available (running %s)", ver, st.current);
+    } else { set_state(OTA_UPTODATE); ESP_LOGI(TAG, "check result: up to date (running %s, latest %s%s)", st.current, ver, strcmp(ver, bad) ? "" : ", skipped: failed before"); }
 }
 static void do_install(void) {
     set_state(OTA_INSTALLING); st.progress = 0;
     esp_http_client_config_t c = { .url = bin_url }; http_cfg_tls(&c);
     esp_https_ota_config_t oc = { .http_config = &c };
     esp_https_ota_handle_t oh = NULL;
-    if (esp_https_ota_begin(&oc, &oh) != ESP_OK) { fail("Download failed"); return; }
+    esp_err_t be = esp_https_ota_begin(&oc, &oh);
+    if (be != ESP_OK) { ESP_LOGW(TAG, "ota begin: %s", esp_err_to_name(be)); fail("Download failed"); return; }
     esp_app_desc_t nd;
     if (esp_https_ota_get_img_desc(oh, &nd) == ESP_OK && strcmp(nd.version, st.available) != 0)
         ESP_LOGW(TAG, "image reports %s, manifest said %s", nd.version, st.available);
@@ -96,7 +104,7 @@ static void do_install(void) {
         int got = esp_https_ota_get_image_len_read(oh);
         if (total > 0) st.progress = got * 100 / total;
     }
-    if (e != ESP_OK || !esp_https_ota_is_complete_data_received(oh)) { esp_https_ota_abort(oh); fail("Download interrupted"); return; }
+    if (e != ESP_OK || !esp_https_ota_is_complete_data_received(oh)) { esp_https_ota_abort(oh); ESP_LOGW(TAG, "ota perform: %s", esp_err_to_name(e)); fail("Download interrupted"); return; }
     if (esp_https_ota_finish(oh) != ESP_OK) { fail("Update didn't verify"); return; }   /* image hash/header checked here */
     int a, b, d; sscanf(st.available, "%d.%d.%d", &a, &b, &d);
     hal_kv_set("ota_try", (a << 16) | (b << 8) | d);   /* remembered in case it fails to boot */
