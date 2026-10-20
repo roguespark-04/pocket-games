@@ -1,0 +1,6 @@
+dependencies:
+  idf: ">=5.5"
+  lvgl/lvgl: "9.4.0"
+  espressif/esp_lcd_co5300: "^2.2.0"
+  waveshare/esp_lcd_touch_cst9217: "*"
+  espressif/es8311: "^1.0.0"

@@ -1,0 +1,8 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+sim/obj/
+sim/sim
+sim/*.rgb565
+sim/srcs.txt
