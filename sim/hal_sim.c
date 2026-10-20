@@ -16,3 +16,4 @@ void hal_ota_install(void) {}
 void hal_ota_ack(void) {}
 void hal_set_brightness(int p) { (void)p; }
 void hal_set_volume(int p) { (void)p; }
+void hal_set_sleep_after(int s) { (void)s; }

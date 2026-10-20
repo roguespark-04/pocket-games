@@ -44,3 +44,4 @@ void hal_ota_ack(void);           /* clears prompt + rolled_back flags */
 
 void hal_set_brightness(int pct);   /* 10..100, live */
 void hal_set_volume(int pct);       /* 0..100, live */
+void hal_set_sleep_after(int seconds); /* 0 = never; live */

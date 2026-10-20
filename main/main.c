@@ -23,6 +23,9 @@ static esp_lcd_touch_handle_t touch;
 static lv_display_t *disp;
 static bool sleeping;
 static int brightness = 80;
+static volatile int64_t last_input_ms;
+static int sleep_after_s = 60;
+void hal_set_sleep_after(int sec) { sleep_after_s = sec; }
 void hal_set_brightness(int pct) { brightness = pct < 10 ? 10 : pct > 100 ? 100 : pct; if (!sleeping) esp_lcd_panel_co5300_set_brightness(panel, brightness); }
 
 static bool trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx) {
@@ -41,6 +44,7 @@ static void touch_read(lv_indev_t *in, lv_indev_data_t *d) {
     esp_lcd_touch_read_data(touch);
     if (!sleeping && esp_lcd_touch_get_coordinates(touch, &x, &y, NULL, &n, 1) && n) {
         d->point.x = x; d->point.y = y; d->state = LV_INDEV_STATE_PRESSED;
+        last_input_ms = esp_timer_get_time() / 1000;
     } else d->state = LV_INDEV_STATE_RELEASED;
 }
 static uint32_t tick_cb(void) { return esp_timer_get_time() / 1000; }
@@ -60,8 +64,10 @@ static void display_init(void) {
     ESP_ERROR_CHECK(esp_lcd_new_panel_co5300(io, &pc, &panel));
     esp_lcd_panel_reset(panel); esp_lcd_panel_init(panel);
     esp_lcd_panel_set_gap(panel, LCD_X_GAP, 0);
-    esp_lcd_panel_disp_on_off(panel, true);
-    brightness = hal_kv_get("bright", 80); esp_lcd_panel_co5300_set_brightness(panel, brightness);
+    /* Keep the panel dark until LVGL has painted a full black frame (no uninitialized-GRAM green flash). */
+    esp_lcd_panel_co5300_set_brightness(panel, 0);
+    esp_lcd_panel_disp_on_off(panel, false);
+    brightness = hal_kv_get("bright", 80); if (brightness < 10) brightness = 10;
 
     size_t sz = LCD_RES * BUF_LINES * 2;   /* small internal DMA strips (2 x 12 lines) */
     void *b1 = heap_caps_malloc(sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -91,11 +97,12 @@ static void set_sleep(bool s) {
 static void power_poll(void) {
     static int64_t down_at; static bool down, hinted;
     int ev = hal_pkey_poll(); int64_t now = esp_timer_get_time() / 1000;
+    if (ev) { ESP_LOGI("pwr", "pkey event %d (down=%d)", ev, down); last_input_ms = now; }
     if (ev & 1) { down = true; down_at = now; hinted = false; }
     if (down && !hinted && now - down_at > 300) { hinted = true; if (sleeping) set_sleep(false); app_power_hint(true); lv_refr_now(NULL); }
     if (down && now - down_at > 1200) { hal_power_off(); vTaskDelay(portMAX_DELAY); }
     if (ev & 2) {
-        if (!down || now - down_at <= 300) set_sleep(!sleeping);  /* short press (or release seen alone) */
+        if (down && now - down_at <= 300) set_sleep(!sleeping);  /* only a real press+release pair; stray edges ignored */
         if (hinted) app_power_hint(false);
         down = false;
     }
@@ -106,9 +113,15 @@ static void ui_task(void *a) {
         int64_t now = esp_timer_get_time() / 1000;
         if (now - last_pk >= 20) { last_pk = now; power_poll();
             static bool boot_prev; bool b = hal_boot_pressed();
-            if (b && !boot_prev) { if (sleeping) set_sleep(false); else app_home_button(); }
+            if (b && !boot_prev) { last_input_ms = now; if (sleeping) set_sleep(false); else app_home_button(); }  /* wake press doesn't go Home */
             boot_prev = b; }
-        if (now - last_status >= 1000) { last_status = now; hal_batt_poll(); app_refresh_status(); }
+        if (now - last_status >= 1000) { last_status = now; hal_batt_poll(); if (!sleeping) app_refresh_status();
+            hal_ota_t o; hal_ota_get(&o);
+            bool ota_busy = o.state == OTA_INSTALLING || o.state == OTA_RESTARTING;
+            if (ota_busy) last_input_ms = now;              /* never sleep mid-install */
+            if (!sleeping && sleep_after_s > 0 && now - last_input_ms > sleep_after_s * 1000LL) {
+                ESP_LOGI("pwr", "auto-sleep after %d s idle", sleep_after_s); set_sleep(true);   /* pauses the game first */
+            } }
         if (now - last_ota >= 200) { last_ota = now; app_ota_tick(); }
         uint32_t d = lv_timer_handler();
         if (!marked && now > 8000) { marked = true; hal_ota_mark_valid(); }  /* UI up and stable for 8 s (Wi-Fi, audio, first frames) */
@@ -123,6 +136,10 @@ void app_main(void) {
     display_init();
     hal_audio_init();
     app_init();
+    lv_refr_now(NULL);                       /* first full frame into GRAM */
+    esp_lcd_panel_disp_on_off(panel, true);
+    esp_lcd_panel_co5300_set_brightness(panel, brightness);
+    sleep_after_s = hal_kv_get("sleep_s", 60); last_input_ms = esp_timer_get_time() / 1000;
     hal_ota_boot();
     xTaskCreatePinnedToCore(ui_task, "ui", 8192, NULL, 5, NULL, 1);
 }

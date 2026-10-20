@@ -329,20 +329,44 @@ static lv_obj_t *setting_row(lv_obj_t *p, const char *name, int y, int val, int 
     char b[8]; snprintf(b, sizeof b, "%d%%", val); lv_label_set_text(*val_lbl, b);
     return sl;
 }
+static const int SLEEP_OPTS[] = { 30, 60, 120, 300, 0 };
+static const char *SLEEP_LBL[] = { "30 s", "1 min", "2 min", "5 min", "Never" };
+static lv_obj_t *sleep_pill[5];
+static void sleep_paint(void) {
+    int cur = hal_kv_get("sleep_s", 60);
+    for (int i = 0; i < 5; i++) {
+        bool on = SLEEP_OPTS[i] == cur;
+        lv_obj_set_style_bg_color(sleep_pill[i], on ? C_BLUE : C_SURFACE2, 0);
+    }
+}
+static void sleep_ev(lv_event_t *e) {
+    int v = SLEEP_OPTS[(intptr_t)lv_event_get_user_data(e)];
+    hal_kv_set("sleep_s", v); hal_set_sleep_after(v); sleep_paint();
+}
 static void settings_done(lv_event_t *e) { (void)e; lv_obj_add_flag(settings, LV_OBJ_FLAG_HIDDEN); }
 void app_open_settings(void) {
     if (!settings) {
         settings = plain(lv_layer_top()); lv_obj_set_size(settings, SCR, SCR); lv_obj_add_flag(settings, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_opa(settings, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(settings, C_BG, 0);
-        lv_obj_t *t = label(settings, F_HEAD, C_LABEL, "Settings"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 56);
-        sl_bright = setting_row(settings, "Brightness", 116, hal_kv_get("bright", 80), 10, &val_bright, 1);
-        sl_vol = setting_row(settings, "Volume", 236, hal_kv_get("volume", 65), 0, &val_vol, 2);
+        lv_obj_t *t = label(settings, F_HEAD, C_LABEL, "Settings"); lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 42);
+        sl_bright = setting_row(settings, "Brightness", 92, hal_kv_get("bright", 80), 10, &val_bright, 1);
+        sl_vol = setting_row(settings, "Volume", 190, hal_kv_get("volume", 65), 0, &val_vol, 2);
+        lv_obj_t *sa = label(settings, F_BODY, C_LABEL, "Sleep after"); lv_obj_set_pos(sa, 83, 288);
+        for (int i = 0; i < 5; i++) {   /* segmented control, 60x44 targets */
+            lv_obj_t *b = lv_button_create(settings); lv_obj_remove_style_all(b);
+            lv_obj_set_size(b, 62, 44); lv_obj_set_style_radius(b, 12, 0); lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+            lv_obj_set_pos(b, (SCR - (5 * 62 + 4 * 6)) / 2 + i * 68, 320);
+            lv_obj_t *l = label(b, F_CAPTION, C_LABEL, SLEEP_LBL[i]); lv_obj_center(l);
+            lv_obj_add_event_cb(b, sleep_ev, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            sleep_pill[i] = b;
+        }
+        sleep_paint();
         lv_obj_t *d = lv_button_create(settings); lv_obj_remove_style_all(d);
-        lv_obj_set_size(d, 160, 52); lv_obj_set_style_radius(d, 26, 0);
+        lv_obj_set_size(d, 140, 48); lv_obj_set_style_radius(d, 24, 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0); lv_obj_set_style_bg_color(d, C_BLUE, 0);
         lv_obj_set_style_transform_scale(d, 246, LV_STATE_PRESSED);
-        lv_obj_set_style_transform_pivot_x(d, 80, 0); lv_obj_set_style_transform_pivot_y(d, 26, 0);
-        lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 360);
+        lv_obj_set_style_transform_pivot_x(d, 70, 0); lv_obj_set_style_transform_pivot_y(d, 24, 0);
+        lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 380);
         lv_obj_t *l = label(d, F_BODY, C_LABEL, "Done"); lv_obj_center(l);
         lv_obj_add_event_cb(d, settings_done, LV_EVENT_CLICKED, NULL);
     }
